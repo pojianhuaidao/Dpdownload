@@ -1,0 +1,47 @@
+name: Build EXE and Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up FFmpeg
+        uses: egor-tensin/setup-ffmpeg@v2
+        with:
+          token: ${{ github.token }}
+
+      - name: Install dependencies
+        run: pip install requests pyinstaller
+
+      - name: Build EXE with PyInstaller
+        run: pyinstaller --onefile --noconsole --icon dplayer_icon.ico --add-data "dplayer_icon.ico;." --name DPlayerDownloader dplayer_downloader.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DPlayerDownloader-exe
+          path: dist/DPlayerDownloader.exe
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_id }}${{ github.run_attempt }}
+          name: DPlayerDownloader v${{ github.run_id }}
+          body: |
+            Auto-built from commit `${{ github.sha }}`.
+            Windows EXE (onefile, no console), bundled with DPlayer icon and embedded FFmpeg pipeline.
+          files: dist/DPlayerDownloader.exe
+          token: ${{ github.token }}

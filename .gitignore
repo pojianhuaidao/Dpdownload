@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Local build artifacts (CI builds them)
+*.exe
+*.spec
+build/
+dist/
+
+# Backup / temp
+*.bak
+*.tmp
