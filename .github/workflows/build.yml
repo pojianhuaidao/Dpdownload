@@ -19,9 +19,7 @@ jobs:
           python-version: '3.11'
 
       - name: Set up FFmpeg
-        uses: egor-tensin/setup-ffmpeg@v2
-        with:
-          token: ${{ github.token }}
+        uses: FedericoCarboni/setup-ffmpeg@v3
 
       - name: Install dependencies
         run: pip install requests pyinstaller
