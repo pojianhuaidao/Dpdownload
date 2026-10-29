@@ -111,9 +111,11 @@ def parse_data_config(html):
     """优先解析 data-config 属性，返回页面中所有 <div data-config='{...json...}'> 的 video 配置列表。
 
     一个页面可能包含多个 DPlayer 播放器（多个 data-config），全部提取返回。
+    页面模板/缓存/内嵌脚本可能重复输出同一配置，按 url 去重，保证每条视频只生成一条任务。
     """
     pat = r"data-config\s*=\s*(['\"])(.*?)\1"
     results = []
+    seen = set()
     for m in re.finditer(pat, html, re.IGNORECASE):
         raw = m.group(2)
         raw = raw.replace("&quot;", '"').replace("&amp;", "&").replace("&#39;", "'")
@@ -124,6 +126,10 @@ def parse_data_config(html):
             continue
         video = cfg.get("video") if isinstance(cfg, dict) else None
         if isinstance(video, dict) and video.get("url"):
+            url = video["url"]
+            if url in seen:
+                continue
+            seen.add(url)
             results.append(video)
     return results
 
@@ -247,12 +253,13 @@ def unique_path(save_dir, base_name):
 class DownloadTask:
     """单个下载任务（数据 + 线程控制事件）"""
 
-    def __init__(self, tid, page_url, video_url, protocol, title):
+    def __init__(self, tid, page_url, video_url, protocol, title, row_index=0):
         self.tid = tid
         self.page_url = page_url
         self.video_url = video_url
         self.protocol = protocol      # HLS / FLV / DIRECT / UNKNOWN
         self.title = title or "video"
+        self.row_index = row_index    # 产生该任务的输入框 URL 行号（1-based，0=未知）
         self.base_name = sanitize_filename(self.title) + ".mp4"
         self.status = ST_WAIT
         self.progress = 0.0
@@ -892,6 +899,16 @@ class TaskRow:
                                    font=("Microsoft YaHei", 9))
         self.info_label.pack(fill=tk.X)
 
+        # 来源归属：标明该任务由输入框第几行 URL 解析得到，混合输入时可准确区分
+        if task.page_url:
+            if task.row_index:
+                src = "来源 第{}行：{}".format(task.row_index, task.page_url)
+            else:
+                src = "来源：{}".format(task.page_url)
+            self.source_label = tk.Label(self.frame, text=src, anchor="w",
+                                         fg="#888888", font=("Consolas", 8))
+            self.source_label.pack(fill=tk.X)
+
         bar_row = tk.Frame(self.frame)
         bar_row.pack(fill=tk.X)
         self.bar = ttk.Progressbar(bar_row, mode="determinate", maximum=100)
@@ -1135,14 +1152,16 @@ class DplayerDownloaderApp:
                         task.tid, task.base_name, task.protocol))
                     self._refresh_total_progress()
                 elif kind == "parsed_task":
-                    page_url, video_url, protocol, title = args
+                    row_index, page_url, video_url, protocol, title = args
                     self.tid_counter += 1
                     task = DownloadTask(self.tid_counter, page_url,
-                                        video_url, protocol, title)
+                                        video_url, protocol, title,
+                                        row_index=row_index)
                     self.tasks.append(task)
                     self.rows[task.tid] = TaskRow(self.task_container, task, self)
-                    self.log("任务 #{} 已加入：{} [{}]".format(
-                        task.tid, task.base_name, task.protocol))
+                    self.log("任务 #{} 已加入：{} [{}]（来源第{}行：{}）".format(
+                        task.tid, task.base_name, task.protocol,
+                        row_index, page_url))
                     self._refresh_total_progress()
                 elif kind == "parse_done":
                     self._parse_pending = max(0, self._parse_pending - 1)
@@ -1265,12 +1284,13 @@ class DplayerDownloaderApp:
         self.log("开始解析 {} 个页面地址 ...".format(len(valid)))
         self.set_status("正在解析 ...")
         self._parse_pending = len(valid)
-        for u in valid:
+        # 每个 URL 启动独立解析线程，携带输入行号（1-based）用于结果归属
+        for row_index, u in enumerate(valid, 1):
             threading.Thread(target=self._parse_one_worker,
-                             args=(u,), daemon=True).start()
+                             args=(u, row_index), daemon=True).start()
 
-    def _parse_one_worker(self, page_url):
-        """解析单个页面（子线程），成功后投递 add_task"""
+    def _parse_one_worker(self, page_url, row_index=0):
+        """解析单个页面（子线程），成功后投递 add_task；row_index 为输入框行号（1-based）"""
         try:
             html = get_page_html(page_url)
         except Exception as exc:  # noqa: BLE001
@@ -1295,9 +1315,9 @@ class DplayerDownloaderApp:
         for idx, video in enumerate(videos, 1):
             video_url = resolve_url(video["url"], page_url)
             protocol = detect_protocol(video_url, video.get("type", ""))
-            self.log("解析成功（{}/{}，{}）：{} [{}]".format(
-                idx, len(videos), source, video_url, protocol))
-            self.post("parsed_task", page_url, video_url, protocol, title)
+            self.log("解析成功（第{}行 {}/{}，{}）：{} [{}]".format(
+                row_index, idx, len(videos), source, video_url, protocol))
+            self.post("parsed_task", row_index, page_url, video_url, protocol, title)
         self.post("parse_done", None)
 
     # ---------- 全部取消 ----------
