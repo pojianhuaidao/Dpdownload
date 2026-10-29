@@ -108,8 +108,12 @@ def extract_page_title(html):
 
 
 def parse_data_config(html):
-    """优先解析 data-config 属性：<div data-config='{...json...}'> 或 data-config="..." """
+    """优先解析 data-config 属性，返回页面中所有 <div data-config='{...json...}'> 的 video 配置列表。
+
+    一个页面可能包含多个 DPlayer 播放器（多个 data-config），全部提取返回。
+    """
     pat = r"data-config\s*=\s*(['\"])(.*?)\1"
+    results = []
     for m in re.finditer(pat, html, re.IGNORECASE):
         raw = m.group(2)
         raw = raw.replace("&quot;", '"').replace("&amp;", "&").replace("&#39;", "'")
@@ -120,49 +124,55 @@ def parse_data_config(html):
             continue
         video = cfg.get("video") if isinstance(cfg, dict) else None
         if isinstance(video, dict) and video.get("url"):
-            return video
-    return None
+            results.append(video)
+    return results
 
 
 def parse_dplayer_js(html):
-    """匹配 new DPlayer({...}) 或 dplayer 配置段，提取 video.url"""
+    """匹配 new DPlayer({...}) 或 dplayer 配置段，返回页面中所有 video 配置列表。
+
+    一个页面可能包含多个 DPlayer 播放器实例（多个 new DPlayer / dplayer 配置），
+    全部提取并按 url 去重后返回。
+    """
     candidates = []
     lower = html.lower()
-    for kw in ["new dplayer", "new dplayer({", "dplayer({"]:
-        idx = lower.find(kw)
-        if idx >= 0:
-            start = lower.find("{", idx)
-            if start >= 0:
-                depth = 0
-                i = start
-                in_str = False
-                str_ch = ""
-                for i in range(start, len(html)):
-                    ch = html[i]
-                    if in_str:
-                        if ch == "\\":
-                            i += 1
-                            continue
-                        if ch == str_ch:
-                            in_str = False
-                        continue
-                    if ch in ("'", '"', "`"):
-                        in_str = True
-                        str_ch = ch
-                        continue
-                    if ch == "{":
-                        depth += 1
-                    elif ch == "}":
-                        depth -= 1
-                        if depth == 0:
-                            candidates.append(html[start:i + 1])
-                            break
+    # 1) 定位所有 new DPlayer / dplayer( 起点，逐个做花括号配平
+    for m in re.finditer(r"new\s+dplayer|dplayer\s*\(", lower):
+        start = lower.find("{", m.start())
+        if start < 0:
+            continue
+        depth = 0
+        in_str = False
+        str_ch = ""
+        i = start
+        while i < len(html):
+            ch = html[i]
+            if in_str:
+                if ch == "\\":
+                    i += 1
+                elif ch == str_ch:
+                    in_str = False
+            else:
+                if ch in ("'", '"', "`"):
+                    in_str = True
+                    str_ch = ch
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidates.append(html[start:i + 1])
+                        break
+            i += 1
 
+    # 2) 如果没有配平结果，退而求其次用正则截取较大块
     if not candidates:
         for m in re.finditer(r"dplayer\s*\(\s*(\{.*?\})\s*\)", html,
                              re.IGNORECASE | re.DOTALL):
             candidates.append(m.group(1))
 
+    results = []
+    seen = set()
     for block in candidates:
         vm = re.search(r"['\"]?video['\"]?\s*:\s*\{([^}]*)\}", block,
                        re.IGNORECASE | re.DOTALL)
@@ -177,9 +187,10 @@ def parse_dplayer_js(html):
         type_m = re.search(r"['\"]?type['\"]?\s*:\s*['\"]([^'\"]+)['\"]",
                            video_body, re.IGNORECASE)
         vtype = type_m.group(1).strip() if type_m else ""
-        if url:
-            return {"url": url, "type": vtype}
-    return None
+        if url and url not in seen:
+            seen.add(url)
+            results.append({"url": url, "type": vtype})
+    return results
 
 
 def resolve_url(raw_url, page_url):
@@ -1268,22 +1279,25 @@ class DplayerDownloaderApp:
             self.post("parse_done", None)
             return
 
-        video = parse_data_config(html)
+        videos = parse_data_config(html)
         source = "data-config 属性"
-        if not video:
-            video = parse_dplayer_js(html)
+        if not videos:
+            videos = parse_dplayer_js(html)
             source = "new DPlayer / dplayer 配置段"
-        if not video:
+        if not videos:
             self.log("[错误] 未在页面中找到 DPlayer 配置：{}".format(page_url))
             self.log("提示：请用浏览器 F12 -> Network -> media/xhr 手动查找真实地址。")
             self.post("parse_done", None)
             return
 
-        video_url = resolve_url(video["url"], page_url)
-        protocol = detect_protocol(video_url, video.get("type", ""))
         title = extract_page_title(html) or "video"
-        self.log("解析成功：{} [{}]".format(video_url, protocol))
-        self.post("parsed_task", page_url, video_url, protocol, title)
+        # 页面可能有多个 DPlayer 实例：每个视频地址生成一行独立任务
+        for idx, video in enumerate(videos, 1):
+            video_url = resolve_url(video["url"], page_url)
+            protocol = detect_protocol(video_url, video.get("type", ""))
+            self.log("解析成功（{}/{}，{}）：{} [{}]".format(
+                idx, len(videos), source, video_url, protocol))
+            self.post("parsed_task", page_url, video_url, protocol, title)
         self.post("parse_done", None)
 
     # ---------- 全部取消 ----------

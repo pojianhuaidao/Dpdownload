@@ -85,10 +85,14 @@ def extract_page_title(html):
 
 
 def parse_data_config(html):
-    """优先解析 data-config 属性：<div data-config='{...json...}'> 或 data-config="..." """
+    """优先解析 data-config 属性，返回页面中所有 <div data-config='{...json...}'> 的 video 配置列表。
+
+    一个页面可能包含多个 DPlayer 播放器（多个 data-config），全部提取返回。
+    """
     # 首尾同种引号配对：单引号包裹时内部双引号 JSON 不受影响；
     # 双引号包裹时内部应使用 &quot; 转义，同样不受影响
     pat = r"data-config\s*=\s*(['\"])(.*?)\1"
+    results = []
     for m in re.finditer(pat, html, re.IGNORECASE):
         raw = m.group(2)
         # 去除可能存在的 HTML 转义
@@ -100,47 +104,48 @@ def parse_data_config(html):
             continue
         video = cfg.get("video") if isinstance(cfg, dict) else None
         if isinstance(video, dict) and video.get("url"):
-            return video
-    return None
+            results.append(video)
+    return results
 
 
 def parse_dplayer_js(html):
-    """匹配 new DPlayer({...}) 或 dplayer 配置段，提取 video.url"""
+    """匹配 new DPlayer({...}) 或 dplayer 配置段，返回页面中所有 video 配置列表。
+
+    一个页面可能包含多个 DPlayer 播放器实例（多个 new DPlayer / dplayer 配置），
+    全部提取并按 url 去重后返回。
+    """
     candidates = []
 
     # 1) new DPlayer({...}) 的 JS 对象，花括号需要配平
-    # 先找所有包含 dplayer 关键词的括号起点
+    # 定位所有包含 dplayer 关键词的括号起点，逐个配平
     lower = html.lower()
-    for kw in ["new dplayer", "new dplayer({", "dplayer({"]:
-        idx = lower.find(kw)
-        if idx >= 0:
-            # 从第一个 { 开始做花括号配平
-            start = lower.find("{", idx)
-            if start >= 0:
-                depth = 0
-                i = start
-                in_str = False
-                str_ch = ""
-                for i in range(start, len(html)):
-                    ch = html[i]
-                    if in_str:
-                        if ch == "\\":
-                            i += 1
-                            continue
-                        if ch == str_ch:
-                            in_str = False
-                        continue
-                    if ch in ("'", '"', "`"):
-                        in_str = True
-                        str_ch = ch
-                        continue
-                    if ch == "{":
-                        depth += 1
-                    elif ch == "}":
-                        depth -= 1
-                        if depth == 0:
-                            candidates.append(html[start:i + 1])
-                            break
+    for m in re.finditer(r"new\s+dplayer|dplayer\s*\(", lower):
+        start = lower.find("{", m.start())
+        if start < 0:
+            continue
+        depth = 0
+        in_str = False
+        str_ch = ""
+        i = start
+        while i < len(html):
+            ch = html[i]
+            if in_str:
+                if ch == "\\":
+                    i += 1
+                elif ch == str_ch:
+                    in_str = False
+            else:
+                if ch in ("'", '"', "`"):
+                    in_str = True
+                    str_ch = ch
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidates.append(html[start:i + 1])
+                        break
+            i += 1
 
     # 2) 如果没有配平结果，退而求其次用正则截取较大块
     if not candidates:
@@ -148,6 +153,8 @@ def parse_dplayer_js(html):
                              re.IGNORECASE | re.DOTALL):
             candidates.append(m.group(1))
 
+    results = []
+    seen = set()
     for block in candidates:
         # 键名可带引号（JSON 形式 "video": 或 JS 裸键 video:）
         vm = re.search(r"['\"]?video['\"]?\s*:\s*\{([^}]*)\}", block,
@@ -163,9 +170,10 @@ def parse_dplayer_js(html):
         type_m = re.search(r"['\"]?type['\"]?\s*:\s*['\"]([^'\"]+)['\"]",
                            video_body, re.IGNORECASE)
         vtype = type_m.group(1).strip() if type_m else ""
-        if url:
-            return {"url": url, "type": vtype}
-    return None
+        if url and url not in seen:
+            seen.add(url)
+            results.append({"url": url, "type": vtype})
+    return results
 
 
 def resolve_url(raw_url, page_url):
@@ -275,12 +283,12 @@ def main():
         sys.exit(1)
 
     print("[2/4] 正在解析 DPlayer 配置...")
-    video = parse_data_config(html)
+    videos = parse_data_config(html)
     source = "data-config 属性"
-    if not video:
-        video = parse_dplayer_js(html)
+    if not videos:
+        videos = parse_dplayer_js(html)
         source = "new DPlayer / dplayer 配置段"
-    if not video:
+    if not videos:
         print("[错误] 未在页面中找到 DPlayer 配置或 video.url。")
         print("可能原因：")
         print("  1. 页面播放器不是 DPlayer（可能是 video.js / flv.js / hls.js 等）；")
@@ -290,38 +298,45 @@ def main():
         print("找到 .m3u8/.mp4/.flv 请求后复制其真实地址，再用 ffmpeg/curl 下载。")
         sys.exit(1)
 
-    raw_url = video["url"]
-    vtype = video.get("type", "")
-    video_url = resolve_url(raw_url, page_url)
-    protocol = detect_protocol(video_url, vtype)
-
     # 默认输出文件名：用户指定 > 页面标题 > 固定名
-    out_name = args.output
-    if not out_name:
+    base_name = args.output
+    if not base_name:
         title = extract_page_title(html)
         if title:
-            out_name = sanitize_filename(title) + ".mp4"
+            base_name = sanitize_filename(title) + ".mp4"
         else:
-            out_name = "video_output.mp4"
-    if not out_name.lower().endswith((".mp4", ".flv", ".mkv", ".ts", ".webm")):
-        out_name = out_name + ".mp4"
+            base_name = "video_output.mp4"
+    if not base_name.lower().endswith((".mp4", ".flv", ".mkv", ".ts", ".webm")):
+        base_name = base_name + ".mp4"
 
-    print("[3/4] 检测结果：")
-    print("  配置来源  ：{}".format(source))
-    print("  视频协议  ：{}".format(protocol))
-    print("  视频地址  ：{}".format(video_url))
+    # 页面可能有多个 DPlayer 实例：逐条检测并生成下载命令（多视频文件名加序号）
+    print("[3/4] 检测结果（共解析到 {} 个视频）：".format(len(videos)))
+    for idx, video in enumerate(videos, 1):
+        raw_url = video["url"]
+        vtype = video.get("type", "")
+        video_url = resolve_url(raw_url, page_url)
+        protocol = detect_protocol(video_url, vtype)
+        if len(videos) > 1:
+            dot = base_name.rfind(".")
+            out_name = (base_name[:dot] + "({})".format(idx) + base_name[dot:]
+                        if dot > 0 else base_name + "({})".format(idx))
+        else:
+            out_name = base_name
+        print("  [{}/{}] 配置来源：{}".format(idx, len(videos), source))
+        print("  [{}/{}] 视频协议：{}".format(idx, len(videos), protocol))
+        print("  [{}/{}] 视频地址：{}".format(idx, len(videos), video_url))
+        print("  [{}/{}] 输出文件：{}".format(idx, len(videos), out_name))
 
-    cmd = build_download_command(protocol, video_url, out_name)
-    print("[4/4] 生成下载命令：")
-    print("-" * 60)
-    print(cmd)
-    print("-" * 60)
+        cmd = build_download_command(protocol, video_url, out_name)
+        print("[4/4] 生成下载命令（{}/{}）：".format(idx, len(videos)))
+        print("-" * 60)
+        print(cmd)
+        print("-" * 60)
+        if args.exec:
+            execute_command(cmd)
+
     print("提示：请复制上面命令到 PowerShell 中执行（需提前安装 ffmpeg 或 curl）。")
-    print("输出文件：{}".format(out_name))
-
-    if args.exec:
-        execute_command(cmd)
-    else:
+    if not args.exec:
         print("\n（未添加 --exec，不执行下载。如需自动执行请加 --exec 参数）")
 
 
