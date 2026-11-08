@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 67425aee6b41b6be2f991b4754092804_5191a2c5db1711f19280525400393706
+    ReservedCode1: O9c2c13fokh2A8Nzwbai+ItbC5KuhHQ8y2R6Caeb2iFVUn2h6FesLiQov4Sub+mtSvl+yL/cUHRNHW4bXura+eyI/r91YSNLt2E7fMlOi0jOFaxqZsi2G85H9I6xWsH96LEs3nLsTi9G/d1KMsJh7DzE6ZV0DyQf1HWH9dg5PzJi3GmfDPOAg61kJzY=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 67425aee6b41b6be2f991b4754092804_5191a2c5db1711f19280525400393706
+    ReservedCode2: O9c2c13fokh2A8Nzwbai+ItbC5KuhHQ8y2R6Caeb2iFVUn2h6FesLiQov4Sub+mtSvl+yL/cUHRNHW4bXura+eyI/r91YSNLt2E7fMlOi0jOFaxqZsi2G85H9I6xWsH96LEs3nLsTi9G/d1KMsJh7DzE6ZV0DyQf1HWH9dg5PzJi3GmfDPOAg61kJzY=
+---
+
 # DPlayer 下载器（C++ 版）
 
 把 DPlayer 播放页的视频抓下来：解析页面拿到直链 / HLS 播放列表，再逐段下载并合并成可播放文件。
@@ -49,3 +60,4 @@ g++ -std=c++17 -O2 -mwindows -static -static-libgcc -static-libstdc++ \
 ## 说明
 
 早期的 Python 实现（`dplayer_downloader.py` / `dplayer_url_grabber.py`）已退役，仅在本机 `_legacy_python/` 留档，不纳入版本管理。
+*（内容由AI生成，仅供参考）*
