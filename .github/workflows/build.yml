@@ -1,4 +1,4 @@
-name: Build EXE and Release
+name: Build C++ EXE and Release
 
 on:
   push:
@@ -16,33 +16,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Setup MSYS2 / MinGW-w64
+        uses: msys2/setup-msys2@v2
         with:
-          python-version: '3.11'
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-binutils
 
-      - name: Set up FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
-
-      - name: Install dependencies
-        run: pip install requests pyinstaller
-
-      - name: Build EXE with PyInstaller
-        run: pyinstaller --onefile --noconsole --icon dplayer_icon.ico --add-data "dplayer_icon.ico;." --name DPlayerDownloader dplayer_downloader.py
+      - name: Build (static single-file exe)
+        shell: msys2 {0}
+        run: |
+          cd cpp
+          windres -i app.rc -o app_res.o
+          g++ -std=c++17 -O2 -mwindows -Wall \
+              -static -static-libgcc -static-libstdc++ \
+              core.cpp http.cpp parser.cpp engine.cpp gui.cpp main.cpp app_res.o \
+              -o DPlayerDownloaderC.exe \
+              -lcomctl32 -lwinhttp -lshell32 -lole32 -lshlwapi -luuid -lgdi32 -luser32 -ladvapi32 -s
+          ls -la DPlayerDownloaderC.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DPlayerDownloader-exe
-          path: dist/DPlayerDownloader.exe
+          name: DPlayerDownloaderC-exe
+          path: cpp/DPlayerDownloaderC.exe
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ github.run_id }}${{ github.run_attempt }}
-          name: DPlayerDownloader v${{ github.run_id }}
+          tag_name: cpp-${{ github.run_id }}
+          name: DPlayer Downloader (C++ build ${{ github.run_id }})
           body: |
             Auto-built from commit `${{ github.sha }}`.
-            Windows EXE (onefile, no console), bundled with DPlayer icon and embedded FFmpeg pipeline.
-          files: dist/DPlayerDownloader.exe
+
+            Windows single-file EXE (C++17 + Win32 + WinHTTP, static link, no external runtime DLL).
+            FFmpeg is only required for AES-128 encrypted HLS streams — put `ffmpeg.exe`
+            next to the program or in PATH.
+          files: cpp/DPlayerDownloaderC.exe
           token: ${{ github.token }}

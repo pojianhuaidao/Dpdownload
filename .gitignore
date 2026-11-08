@@ -1,13 +1,15 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
+# Local legacy Python implementation (not tracked)
+_legacy_python/
 
-# Local build artifacts (CI builds them)
+# Build artifacts (CI builds them)
 *.exe
+*.o
 *.spec
 build/
 dist/
+__pycache__/
+*.pyc
+*.pyo
 
 # Backup / temp
 *.bak
